@@ -4,8 +4,8 @@
 ![Static Badge](https://img.shields.io/badge/ROS2-Available-green)
 ![Static Badge](https://img.shields.io/badge/License-Apache%202.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
-![GitHub Repo stars](https://img.shields.io/github/stars/robotmcp/ros-mcp?style=social)
-![GitHub last commit](https://img.shields.io/github/last-commit/robotmcp/ros-mcp)
+![GitHub Repo stars](https://img.shields.io/github/stars/goldenglorys/ros-mcp?style=social)
+![GitHub last commit](https://img.shields.io/github/last-commit/goldenglorys/ros-mcp)
 
 <p align="center">
   <img src="https://github.com/goldenglorys/ros-mcp/blob/main/docs/images/framework.png"/>
