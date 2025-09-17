@@ -1,0 +1,72 @@
+[
+  {
+    "id": 1,
+    "prompt": "Guide the turtle around the screen without hitting the edges.",
+    "expected_tools": ["subscribe_topic:/turtle1/pose", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "simple",
+    "expected_outcome": "Turtle moves safely; pose updates show boundary avoidance."
+  },
+  {
+    "id": 2,
+    "prompt": "Have the turtle go to the top-left corner, pause, then spin once.",
+    "expected_tools": ["call_service:/turtle1/teleport_absolute", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "multi-step",
+    "expected_outcome": "Teleports to (0,11); spins (angular.z >0); pauses (linear=0)."
+  },
+  {
+    "id": 3,
+    "prompt": "Make the turtle explore randomly but end up back at the start after a loop.",
+    "expected_tools": ["subscribe_topic:/turtle1/pose", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "fuzzy",
+    "expected_outcome": "Random velocity pubs; final pose near (5.5,5.5)."
+  },
+  {
+    "id": 4,
+    "prompt": "If the turtle is facing right, turn left and move forward slowly.",
+    "expected_tools": ["subscribe_topic:/turtle1/pose", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "conditioned",
+    "expected_outcome": "Checks theta~0; angular.z<0, then linear.x=0.5."
+  },
+  {
+    "id": 5,
+    "prompt": "Plan a square path: forward, right turn, forward, left turn, and report the final position with real coordinates.",
+    "expected_tools": ["publish_topic:/turtle1/cmd_vel", "subscribe_topic:/turtle1/pose"],
+    "complexity": "multi-goal",
+    "expected_outcome": "4 velocity sequences; final pose cited (e.g., x=5.5)."
+  },
+  {
+    "id": 6,
+    "prompt": "Draw a circle with the turtle using smooth motion.",
+    "expected_tools": ["publish_topic:/turtle1/cmd_vel"],
+    "complexity": "simple",
+    "expected_outcome": "Continuous angular/linear for loop path."
+  },
+  {
+    "id": 7,
+    "prompt": "Reset the turtle and change its pen to green before moving forward.",
+    "expected_tools": ["call_service:/turtle1/teleport_absolute", "call_service:/turtle1/set_pen", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "multi-step",
+    "expected_outcome": "Teleports to center; pen RGB=0,255,0; linear.x>0."
+  },
+  {
+    "id": 8,
+    "prompt": "Stop the turtle if it's moving too fast, then slow it down.",
+    "expected_tools": ["subscribe_topic:/turtle1/cmd_vel", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "conditioned",
+    "expected_outcome": "Subs linear.x>1.0; pubs linear.x=0.3."
+  },
+  {
+    "id": 9,
+    "prompt": "Explore the bottom half of the screen and describe what the turtle sees in terms of position.",
+    "expected_tools": ["subscribe_topic:/turtle1/pose", "publish_topic:/turtle1/cmd_vel"],
+    "complexity": "fuzzy",
+    "expected_outcome": "y<5.5; response cites pose (e.g., 'at (3,2)')."
+  },
+  {
+    "id": 10,
+    "prompt": "Create a spiral pattern starting from the center, getting wider each loop.",
+    "expected_tools": ["publish_topic:/turtle1/cmd_vel"],
+    "complexity": "multi-goal",
+    "expected_outcome": "Increasing angular/linear radii over time."
+  }
+]
