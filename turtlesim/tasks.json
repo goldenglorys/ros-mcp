@@ -71,7 +71,7 @@
   },
   {
     "id": 11,
-    "prompt": "Spawn a second turtle; have the first draw a triangle (3 sides, equal lengths) while the second draws a square (4 sides). Report both final positions.",
+    "prompt": "Spawn a second turtle and name it turtle2, have the first draw a triangle (3 sides, equal lengths) while the second draws a square (4 sides).",
     "expected_tools": ["call_service:/spawn", "publish_topic:/turtle1/cmd_vel", "publish_topic:/turtle2/cmd_vel", "subscribe_topic:/turtle1/pose", "subscribe_topic:/turtle2/pose"],
     "complexity": "multi-goal",
     "expected_outcome": "Spawns turtle2; sequenced pubs for shapes; cites poses for both."
