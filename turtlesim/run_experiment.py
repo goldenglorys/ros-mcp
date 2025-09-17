@@ -3,109 +3,219 @@ import json
 import subprocess
 import time
 import os
-import sys
 from datetime import datetime
+import random
+from rich.console import Console
+from rich.panel import Panel
+from tqdm import tqdm
+
+console = Console()
 
 # Load tasks
-with open('tasks.json', 'r') as f:
+with open("tasks.json", "r") as f:
     tasks = json.load(f)
 
-# Config
-NUM_TRIALS = 3  # Runs per task
-LLM_CLIENT = "claude"  # "claude" or "gemini"
+NUM_TRIALS = 1
 LOGS_DIR = "experiment_logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
+GEMINI_CMD = ["gemini", "--non-interactive"]
+MODEL = "gemini-2.5-pro"
+PROVIDER = "google"
+MAX_RETRIES = 3
+BASE_BACKOFF = 5.0
+
 
 def launch_ros_setup():
-    """Launch TurtleSim + rosbridge + MCP server in background."""
-    # Terminal 1: Source ROS2 + TurtleSim
-    turtlesim_proc = subprocess.Popen([
-        'bash', '-c',
-        'source /opt/ros/humble/setup.bash && ros2 run turtlesim turtlesim_node'
-    ])
+    """Launch TurtleSim + rosbridge in background (MCP server auto-launched by CLI)."""
+    os.system(
+        "source /opt/ros/humble/setup.bash && ros2 run turtlesim turtlesim_node &"
+    )
     time.sleep(2)
-    
-    # Terminal 2: rosbridge
-    rosbridge_proc = subprocess.Popen([
-        'bash', '-c',
-        'source /opt/ros/humble/setup.bash && ros2 launch rosbridge_server rosbridge_websocket_launch.xml'
-    ])
+    os.system(
+        "source /opt/ros/humble/setup.bash && ros2 launch rosbridge_server rosbridge_websocket_launch.xml &"
+    )
     time.sleep(2)
-    
-    # Terminal 3: MCP server (uv run from parent dir)
-    server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mcp_proc = subprocess.Popen([
-        'bash', '-c', f'cd {server_dir} && uv run server.py'
-    ])
-    time.sleep(2)
-    return [turtlesim_proc, rosbridge_proc, mcp_proc]
+    console.print(
+        Panel(
+            "ROS setup launched. Gemini CLI will auto-start ros-mcp server.",
+            title="Setup",
+            style="bold green",
+        )
+    )
 
-def run_task_with_claude(task_id, prompt, trial_num):
-    """Interactive run with Claude Desktop: Prompt user to input in Claude, capture output."""
-    print(f"\n--- Task {task_id} Trial {trial_num} ---")
-    print(f"Prompt: {prompt}")
-    input("Open Claude Desktop, paste prompt, run until done. Press Enter when trajectory complete (check logs).")
-    
-    # Manual log capture: Assume user pastes Claude's final response/trajectory here
-    trajectory_input = input("Paste Claude's final response/trajectory JSON (or describe): ")
-    try:
-        trajectory = json.loads(trajectory_input) if trajectory_input.strip().startswith('{') else {"description": trajectory_input}
-    except:
-        trajectory = {"description": trajectory_input, "tools_used": []}  # Fallback
-    
+
+def run_task_gemini_cli(task_id, prompt, trial_num, last_state_summary=""):
+    """Automate Gemini CLI with retries/backoff. Self-contained prompt."""
+    full_prompt = (
+        f"{last_state_summary} "
+        f"Connect to ros-mcp at ws://0.0.0.0:9090 (assume ros-mcp, no extra details needed). "
+        f"Execute this fuzzy task using MCP tools (e.g., subscribe /turtle1/pose, publish /turtle1/cmd_vel, call /spawn for multiples). "
+        f"Handle all nuances autonomously: multi-turn planning, services like /teleport_absolute or /set_pen, multi-turtle if needed (e.g., pub to /turtle2/cmd_vel). "
+        f"Ground in outputs (cite poses). Output JSON only: {{'tools_used': ['list', 'of', 'tools'], 'response': 'summary', 'final_pose': {{'x': num, 'y': num}}, 'multi_turtle_poses': {{}} if applicable}}."
+        f"Task: {prompt}"
+    )
+
+    console.print(f"\n--- [bold cyan]Task {task_id} Trial {trial_num}[/bold cyan] ---")
+    console.print(f"Prompt Preview: {full_prompt[:100]}...")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            proc = subprocess.run(
+                GEMINI_CMD,
+                input=full_prompt,
+                text=True,
+                capture_output=True,
+                timeout=60,
+                env={**os.environ, "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", "")},
+            )
+
+            if proc.returncode == 0:
+                stdout = proc.stdout.strip()
+                console.print(f"Raw Output: {stdout[:200]}...")
+                try:
+                    trajectory = (
+                        json.loads(stdout)
+                        if stdout.startswith("{")
+                        else {
+                            "response": stdout,
+                            "tools_used": [
+                                line
+                                for line in stdout.split("\n")
+                                if any(
+                                    tool in line
+                                    for tool in ["publish", "subscribe", "call_service"]
+                                )
+                            ],
+                            "final_pose": {},
+                            "multi_turtle_poses": {},
+                        }
+                    )
+                except json.JSONDecodeError:
+                    trajectory = {
+                        "raw_response": stdout,
+                        "tools_used": [],
+                        "final_pose": {},
+                        "multi_turtle_poses": {},
+                    }
+
+                success = any(
+                    word in str(trajectory).lower()
+                    for word in ["success", "done", "executed"]
+                ) or "pose" in str(trajectory)
+                steps = len(trajectory.get("tools_used", []))
+                notes = f"Success on attempt {attempt}; {steps} steps"
+                retry_attempts = attempt
+                error_details = ""
+                break  # Success
+            else:
+                error_details = proc.stderr
+                console.print(
+                    f"[bold red]Attempt {attempt} failed:[/bold red] {error_details[:100]}"
+                )
+                if attempt < MAX_RETRIES:
+                    delay = (BASE_BACKOFF * (2 ** (attempt - 1))) + random.uniform(
+                        0, 1
+                    )  # Jitter
+                    console.print(f"[yellow]Backoff {delay:.1f}s...[/yellow]")
+                    time.sleep(delay)
+                else:
+                    trajectory = {"error": error_details, "tools_used": []}
+                    success = False
+                    steps = 0
+                    notes = f"Failed after {MAX_RETRIES} attempts"
+                    retry_attempts = MAX_RETRIES
+
+        except subprocess.TimeoutExpired:
+            error_details = "Timeout"
+            console.print(f"[bold red]Attempt {attempt} timeout[/bold red]")
+            if attempt < MAX_RETRIES:
+                delay = (BASE_BACKOFF * (2 ** (attempt - 1))) + random.uniform(0, 1)
+                time.sleep(delay)
+            else:
+                trajectory = {"error": "Max retries timeout", "tools_used": []}
+                success = False
+                steps = 0
+                notes = "Max retries on timeout"
+                retry_attempts = MAX_RETRIES
+
     log_entry = {
         "timestamp": datetime.now().isoformat(),
         "task_id": task_id,
         "prompt": prompt,
         "trial": trial_num,
         "trajectory": trajectory,
-        "success": input("Success? (y/n): ").lower() == 'y',  # Manual flag
-        "notes": input("Notes (e.g., steps, grounding): ")
+        "success": success,
+        "steps": steps,
+        "notes": notes,
+        "retry_attempts": retry_attempts,
+        "error_details": error_details if "error_details" in locals() else "",
+        "model": MODEL,
+        "provider": PROVIDER,
     }
     return log_entry
 
-def run_task_with_gemini(task_id, prompt, trial_num):
-    """Fallback: Use Gemini CLI for automated prompt (requires google-generativeai)."""
-    import google.generativeai as genai
-    genai.configure(api_key="YOUR_GEMINI_API_KEY")  # Set env var
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    print(f"\n--- Task {task_id} Trial {trial_num} ---")
-    print(f"Prompt: {prompt} (with MCP context: connect to localhost:9090)")
-    
-    response = model.generate_content(prompt + "\nUse ROS MCP tools to execute.")
-    trajectory = {"response": response.text, "tools_used": []}  # Parse tools if needed
-    
-    log_entry = {
-        "timestamp": datetime.now().isoformat(),
-        "task_id": task_id,
-        "prompt": prompt,
-        "trial": trial_num,
-        "trajectory": trajectory,
-        "success": "success" in response.text.lower(),  # Simple heuristic
-        "notes": "Gemini auto-run"
-    }
-    return log_entry
 
 def save_log(log_entry, task_id):
     log_file = os.path.join(LOGS_DIR, f"task_{task_id}_logs.jsonl")
-    with open(log_file, 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    with open(log_file, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
 
 def main():
-    procs = launch_ros_setup()
-    try:
-        for task in tasks:
-            for trial in range(1, NUM_TRIALS + 1):
-                if LLM_CLIENT == "claude":
-                    log_entry = run_task_with_claude(task["id"], task["prompt"], trial)
-                else:
-                    log_entry = run_task_with_gemini(task["id"], task["prompt"], trial)
+    launch_ros_setup()
+    last_state_summary = "" 
+    total_tasks = len(tasks)
+    task_successes = []
+
+    with tqdm(total=total_tasks, desc="Running Tasks", unit="task") as pbar:
+        try:
+            for i, task in enumerate(tasks, 1):
+                progress = (i / total_tasks) * 100
+                pbar.set_description(
+                    f"Running Task {i}/{total_tasks} ({progress:.1f}%)"
+                )
+
+                log_entry = run_task_gemini_cli(
+                    task["id"], task["prompt"], 1, last_state_summary
+                )
                 save_log(log_entry, task["id"])
-                time.sleep(5)  # Cooldown between trials
-    finally:
-        for proc in procs:
-            proc.terminate()
+
+                success_str = (
+                    "[green]Success[/green]"
+                    if log_entry["success"]
+                    else "[red]Failed[/red]"
+                )
+                pbar.set_postfix(
+                    {
+                        "Status": success_str,
+                        "Steps": log_entry["steps"],
+                        "Retries": log_entry["retry_attempts"],
+                    }
+                )
+                task_successes.append(log_entry["success"])
+
+                # Chain state for next
+                last_state_summary = f"Previous state summary: {log_entry['trajectory'].get('response', 'N/A')[:100]} (final pose: {log_entry['trajectory'].get('final_pose', {})}). Build coherent workflow."
+
+                time.sleep(15)  # Cooldown per task
+                pbar.update(1)
+
+        finally:
+            os.system("pkill -f turtlesim_node")
+            os.system("pkill -f rosbridge_server")
+            console.print(
+                Panel("Experiment Complete", title="Summary", style="bold green")
+            )
+            overall_success = (
+                sum(task_successes) / len(task_successes) * 100 if task_successes else 0
+            )
+            console.print(
+                f"Overall Success Rate: [bold magenta]{overall_success:.1f}%[/bold magenta] across {total_tasks} tasks."
+            )
+            console.print(
+                "Logs saved in [bold blue]experiment_logs/[/bold blue]. Run evaluate.py for full analysis."
+            )
+
 
 if __name__ == "__main__":
     main()
